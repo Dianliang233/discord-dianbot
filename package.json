@@ -7,6 +7,9 @@
   "author": "Dianliang233 <dianliang233@gmail.com>",
   "license": "MIT",
   "private": true,
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "axios": "^0.21.1",
     "discord.js": "^12.5.3",

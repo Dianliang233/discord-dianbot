@@ -1,13 +1,15 @@
 import Discord from 'discord.js'
 import 'dotenv/config.js'
-import 'global-agent/bootstrap.js'
 import * as fs from 'fs'
 import { JSDOM } from 'jsdom'
 import axios from 'axios'
 
-const client = new Discord.Client({
-  partials: ['MESSAGE', 'CHANNEL', 'REACTION'],
-})
+const client = new Discord.Client()
+
+const webhookClient = new Discord.WebhookClient(
+  process.env.WEBHOOK_ID,
+  process.env.WEBHOOK_TOKEN
+)
 
 let storage
 fs.readFile(
@@ -20,7 +22,9 @@ fs.readFile(
     try {
       storage = JSON.parse(data)
     } catch {
-      storage = {}
+      storage = {
+        wikis: [],
+      }
       save()
     }
   }
@@ -41,34 +45,11 @@ client.on('message', async (message) => {
   }
 })
 
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (reaction.message.channel.id !== '858373176840814642') {
-    return null
-  }
-  // if (reaction.message.id)
-  if (reaction.partial) {
-    try {
-      await reaction.fetch()
-    } catch (error) {
-      console.error('Something went wrong when fetching the message: ', error)
-      // Return as `reaction.message.author` may be undefined/null
-      return
-    }
-  }
-  // Now the message has been cached and is fully available
-  console.log(
-    `${reaction.message.author}'s message "${reaction.message.content}" gained a reaction!`
-  )
-  // The reaction is now also fully available and the properties will be reflected accurately:
-  console.log(
-    `${reaction.count} user(s) have given the same reaction to this message!`
-  )
-})
-
 setInterval(() => {
+  let ogWikis = storage.wikis
   axios
     .get(
-      'https://community.fandom.com/wiki/Special:NewWikis?language=zh&limit=5&uselang=qqx&useskin=fallback'
+      'https://community.fandom.com/wiki/Special:NewWikis?language=zh&limit=15&uselang=qqx&useskin=fallback'
     )
     .then((res) => {
       let dom = new JSDOM(res.data)
@@ -83,26 +64,101 @@ setInterval(() => {
       save()
     })
     .catch(console.error)
+
+  let diff = []
+  ogWikis.forEach((og) => {
+    storage.wikis.forEach((ne) => {
+      if (og.url !== ne.url) {
+        diff.push(ne)
+      }
+    })
+  })
+
+  let wikiEmbeds = []
+  diff.forEach(async (i) => {
+    let wikiDetail = {}
+    axios
+      .get(`${i.url}api/v1/Mercury/WikiVariables`)
+      .then((res) => {
+        let d = res.data
+        wikiDetail = {
+          id: d.data.id,
+          vertical: d.data.vertical,
+          icon: d.data.appleTouchIcon,
+          lang: d.data.language.content,
+          founder: {},
+          name: i.name,
+          url: i.url,
+        }
+      })
+      .catch(console.error)
+    axios
+      .get(`${i.url}api.php?action=query&list=allusers&augroup=bureaucrat`)
+      .then((res) => {
+        let d = res.data
+        wikiDetail.founder = {
+          username: d.query.allusers.name,
+          uid: d.query.allusers.id,
+        }
+        axios
+          .get(`${i.url}api/v1/User/Details?ids=${wikiDetail.founder.uid}`)
+          .then((res) => {
+            let d = res.data
+            wikiDetail.founder.avatar = d.items[0].avatar
+          })
+          .catch(console.error)
+      })
+      .catch(console.error)
+
+    wikiEmbeds.push(
+      new Discord.MessageEmbed({
+        color: '#0099ff',
+        title: wikiDetail.name,
+        description: 'A new wiki',
+        url: wikiDetail.url,
+        author: {
+          name: wikiDetail.founder.username + ` (${wikiDetail.founder.uid})`,
+          iconURL: wikiDetail.founder.avatar,
+          url: `${wikiDetail.url}wiki/User:${wikiDetail.founder.username}`,
+        },
+        fields: [
+          {
+            name: 'City ID',
+            value: '`' + wikiDetail.id + '`',
+            inline: true,
+          },
+        ],
+        footer: {
+          name: 'Dianbot',
+          iconURL:
+            'https://cdn.discordapp.com/avatars/739100868141514773/26a7a008ad0eda15347cee8b047166a0.webp?size=256',
+        },
+      }).setTimestamp()
+    )
+  })
+
+  webhookClient.send(':new: New ZH wiki!', {
+    usernasme: 'Dianbot - New ZH Wiki',
+    avatarURL:
+      'https://cdn.discordapp.com/avatars/739100868141514773/26a7a008ad0eda15347cee8b047166a0.webp?size=256',
+    embeds: [wikiEmbeds],
+    allowedMentions: false,
+  })
 }, 5000)
 
-function sendMessage(text) {
-  new Discord.TextChannel(
-    new Discord.Guild(client, { id: '614402285895811082' }),
-    { id: '858373176840814642' }
-  )
-    .send(text)
-    .then((message) => console.log(`Sent message: ${message.content}`))
-    .catch(console.error)
-}
-
 function save() {
-  fs.writeFile('storage.json', JSON.stringify(storage), { flag: 'w' }, function (err) {
-    if (err) {
-      console.error(err)
-    } else {
-      console.log('Data saved.')
+  fs.writeFile(
+    'storage.json',
+    JSON.stringify(storage),
+    { flag: 'w' },
+    function (err) {
+      if (err) {
+        console.error(err)
+      } else {
+        console.log('Data saved.')
+      }
     }
-  })
+  )
 }
 
 client.login(process.env.BOT_TOKEN)
